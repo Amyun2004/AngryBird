@@ -1,15 +1,18 @@
 """
-enhanced_physics_engine.py - Enhanced physics with realistic damage and destruction
+physics_engine.py - Enhanced physics engine with better collision and damage system
+Fixed sleeping bodies issue
 """
 
 import pymunk
+import pymunk.pygame_util
 import math
 
-# Physics constants
+# Physics constants - Logic Point 5
 GRAVITY = 981  # pixels/s^2
 ELASTICITY_GROUND = 0.6
 FRICTION_GROUND = 1.0
 ELASTICITY_WALL = 0.6
+AIR_DRAG = 0.99  # Logic Point 5: Optional air drag
 
 # Collision categories for filtering
 BIRD_CATEGORY = 0x0001
@@ -23,91 +26,59 @@ COLLISION_TYPE_PIG = 2
 COLLISION_TYPE_BLOCK = 3
 COLLISION_TYPE_GROUND = 4
 
-# Enhanced damage multipliers
+# Damage multipliers - Logic Point 5
 DAMAGE_MULTIPLIERS = {
-    "red": 1.0,      # Balanced bird
-    "yellow": 1.8,   # Yellow birds are powerful against wood
-    "blue": 0.6,     # Blue birds do less damage but good against ice
+    "red": 1.0,
+    "yellow": 1.5,  # Yellow birds do more damage
+    "blue": 0.7,    # Blue birds do less damage individually
 }
 
-# Material properties with more realistic values
-MATERIAL_PROPERTIES = {
-    "ice": {
-        "damage_resistance": 0.2,   # Ice is very fragile
-        "mass_multiplier": 0.3,     # Light
-        "stability_threshold": 15,   # Breaks easily
-        "chain_damage_multiplier": 1.5  # Shatters and spreads damage
-    },
-    "wood": {
-        "damage_resistance": 1.0,   # Standard resistance
-        "mass_multiplier": 0.5,     # Medium weight
-        "stability_threshold": 35,   # Moderate stability
-        "chain_damage_multiplier": 1.0
-    },
-    "stone": {
-        "damage_resistance": 2.5,   # Strong material
-        "mass_multiplier": 2.0,     # Heavy
-        "stability_threshold": 60,   # Very stable
-        "chain_damage_multiplier": 0.8
-    },
-    "metal": {
-        "damage_resistance": 4.0,   # Very strong
-        "mass_multiplier": 3.0,     # Very heavy
-        "stability_threshold": 80,   # Extremely stable
-        "chain_damage_multiplier": 0.5
-    }
-}
-
-# Score values with more nuanced scoring
-SCORE_VALUES = {
-    "bird_hit_pig": 10,
-    "pig_damaged": 100,
-    "pig_eliminated": 5000,
-    "pig_crushed": 3000,
-    "pig_fall_damage": 2000,
-    "block_damaged": 50,
-    "block_destroyed": 500,
-    "block_shattered": 1000,  # Bonus for complete destruction
-    "chain_reaction": 250,     # Bonus for causing chain reactions
-    "structure_collapsed": 2000,  # Bonus for major collapses
+# Material damage resistance - Logic Point 6
+MATERIAL_DAMAGE_RESISTANCE = {
+    "ice": 0.3,     # Ice takes 3x damage
+    "wood": 1.0,    # Normal damage
+    "stone": 2.0,   # Stone takes half damage
+    "metal": 3.0,   # Metal takes 1/3 damage
 }
 
 
-class EnhancedPhysicsEngine:
-    """Enhanced physics engine with realistic damage and scoring"""
+class PhysicsEngine:
+    """Manages the Pymunk physics space with enhanced collision handling"""
     
     def __init__(self, width, height, ground_height):
         self.space = pymunk.Space()
         self.space.gravity = (0, GRAVITY)
-        self.space.damping = 0.95  # Add some air resistance
         self.width = width
         self.height = height
         self.ground_height = ground_height
         
-        # Score tracking
+        # IMPORTANT: Disable automatic sleeping to prevent the error
+        # We'll handle performance optimization differently
+        self.space.sleep_time_threshold = float('inf')  # Disable automatic sleeping
+        
+        # Score tracking for collision callbacks
         self.score_earned = 0
-        self.combo_multiplier = 1.0
-        self.combo_timer = 0
         
-        # Object references
-        self.pigs = []
-        self.blocks = []
-        self.birds = []
-        
-        # Collision tracking
+        # Tracking for chain reactions - Logic Point 7
         self.collision_events = []
-        self.previous_velocities = {}
-        self.structural_integrity = {}
-        self.chain_reaction_timer = 0
+        self.damage_accumulator = {}  # Track damage per frame
+        self.last_damage_time = {}    # Prevent micro-collision spam
         
         # Setup boundaries
         self._create_boundaries()
         
+        # Collision handling flags
+        self.manual_collisions = False
+        self.pigs = []
+        self.blocks = []
+        self.birds = []
+        
     def _create_boundaries(self):
-        """Create ground and walls with proper physics"""
+        """Create ground and walls with proper physics properties"""
+        # Create static body for boundaries
         ground_body = pymunk.Body(body_type=pymunk.Body.STATIC)
         
-        # Ground with proper thickness for stability
+        # Ground - Logic Point 5
         ground_shape = pymunk.Segment(
             ground_body, 
             (0, self.height - self.ground_height), 
@@ -119,486 +90,437 @@ class EnhancedPhysicsEngine:
         ground_shape.collision_type = COLLISION_TYPE_GROUND
         ground_shape.filter = pymunk.ShapeFilter(categories=GROUND_CATEGORY)
         
-        # Walls
+        # Walls with proper elasticity
         left_wall = pymunk.Segment(ground_body, (0, 0), (0, self.height), 5)
         right_wall = pymunk.Segment(ground_body, (self.width, 0), (self.width, self.height), 5)
         left_wall.elasticity = ELASTICITY_WALL
         right_wall.elasticity = ELASTICITY_WALL
+        left_wall.friction = 0.5
+        right_wall.friction = 0.5
         
         self.space.add(ground_body, ground_shape, left_wall, right_wall)
-    
-    def calculate_impact_force(self, arbiter, mass1, mass2):
-        """Calculate realistic impact force from collision"""
-        # Get impulse from collision
-        impulse = arbiter.total_impulse.length
         
-        # Calculate relative velocity at impact
-        if hasattr(arbiter, 'contact_point_set'):
-            points = arbiter.contact_point_set.points
-            if points:
-                # Use actual collision normal and distance
-                normal = arbiter.contact_point_set.normal
-                distance = points[0].distance if points[0].distance > 0 else 0.1
-                
-                # Impact force considers both impulse and penetration
-                force = (impulse / (1 + distance)) * (1 + abs(normal.y) * 0.5)
-            else:
-                force = impulse
-        else:
-            force = impulse
+    def setup_collision_handlers(self, pigs, blocks, birds=None):
+        """Setup enhanced collision handlers between different object types"""
         
-        # Scale by combined mass for more realistic physics
-        total_mass = mass1 + mass2
-        force = force * (2 * mass1 * mass2) / (total_mass * total_mass)
-        
-        return force
-    
-    def calculate_damage(self, force, material_resistance, impact_type="direct"):
-        """Calculate damage with material properties"""
-        # Base damage from force
-        base_damage = math.sqrt(force) / 10
-        
-        # Apply material resistance
-        damage = base_damage / material_resistance
-        
-        # Different impact types have different effectiveness
-        if impact_type == "crush":
-            damage *= 1.5  # Crushing damage is more effective
-        elif impact_type == "shear":
-            damage *= 1.2  # Sideways impacts
-        elif impact_type == "chain":
-            damage *= 0.8  # Chain reaction damage is reduced
-        
-        # Apply combo multiplier for chain reactions
-        damage *= self.combo_multiplier
-        
-        return min(damage, 100)  # Cap at 100 damage
-    
-    def check_structural_stability(self, block):
-        """Check if a block's removal causes structural collapse"""
-        if not hasattr(block, 'body'):
-            return []
-        
-        # Find blocks that are supported by this block
-        supported_blocks = []
-        block_x = block.body.position.x
-        block_y = block.body.position.y
-        
-        for other_block in self.blocks:
-            if other_block == block or other_block.destroyed:
-                continue
-            
-            other_x = other_block.body.position.x
-            other_y = other_block.body.position.y
-            
-            # Check if other block is above and nearby
-            if other_y < block_y - 20:  # Above
-                if abs(other_x - block_x) < block.width:  # Horizontally aligned
-                    supported_blocks.append(other_block)
-        
-        return supported_blocks
-    
-    def trigger_chain_reaction(self, origin_pos, force, radius=100):
-        """Trigger chain reaction damage in an area"""
-        chain_damaged = []
-        
-        for block in self.blocks:
-            if block.destroyed:
-                continue
-            
-            # Calculate distance from origin
-            dx = block.body.position.x - origin_pos[0]
-            dy = block.body.position.y - origin_pos[1]
-            distance = math.sqrt(dx * dx + dy * dy)
-            
-            if distance < radius:
-                # Damage falls off with distance
-                distance_factor = 1 - (distance / radius)
-                chain_damage = force * distance_factor * 0.3
-                
-                # Apply material's chain reaction susceptibility
-                material_props = MATERIAL_PROPERTIES.get(block.material, MATERIAL_PROPERTIES["wood"])
-                chain_damage *= material_props["chain_damage_multiplier"]
-                
-                if block.take_damage(chain_damage):
-                    chain_damaged.append(block)
-                    self.score_earned += SCORE_VALUES["chain_reaction"]
-        
-        return chain_damaged
-    
-    def setup_collision_handlers(self, pigs, blocks):
-        """Setup enhanced collision handlers"""
+        # Store references for collision callbacks
         self.pigs = pigs
         self.blocks = blocks
+        self.birds = birds if birds else []
+        
+        def calculate_impact_damage(arbiter, mass1, mass2, multiplier=1.0):
+            """Calculate damage based on impact physics - Logic Point 5"""
+            # Get relative velocity and impulse
+            if hasattr(arbiter, 'total_impulse'):
+                impulse = arbiter.total_impulse.length
+            else:
+                impulse = 100  # Default if not available
+            
+            if impulse > 0:
+                # Kinetic energy based damage with mass consideration
+                relative_mass = (mass1 * mass2) / (mass1 + mass2) if mass2 > 0 else mass1
+                base_damage = (impulse / 20) * math.sqrt(relative_mass)
+                
+                # Apply multiplier and cap
+                damage = min(base_damage * multiplier, 100)
+                
+                # Minimum damage threshold
+                if damage < 5:
+                    damage = 5
+                    
+                return damage
+            return 10  # Default minimum damage
+        
+        def should_apply_damage(obj_id, current_time=0):
+            """Check if damage should be applied (cooldown for micro-collisions) - Logic Point 15"""
+            # Simplified - always allow damage for now to ensure it works
+            return True
         
         def bird_pig_collision(arbiter, space, data):
+            """Enhanced bird-pig collision with proper damage calculation"""
             bird_shape, pig_shape = arbiter.shapes
             
-            # Find bird for damage calculation
-            bird = None
-            for b in self.birds:
-                if hasattr(b, 'shape') and b.shape == bird_shape:
-                    bird = b
-                    break
-            
-            if not bird:
-                return True
-            
-            # Find pig
+            # Find the pig object
             pig = None
             for p in self.pigs:
                 if p.shape == pig_shape:
                     pig = p
                     break
             
-            if not pig:
+            if not pig or pig.dead:
                 return True
             
             # Calculate impact force
-            force = self.calculate_impact_force(arbiter, bird.mass, 2)
-            
-            # Get bird damage multiplier
-            bird_multiplier = DAMAGE_MULTIPLIERS.get(bird.bird_type, 1.0)
-            
-            # Calculate damage
-            damage = self.calculate_damage(force * bird_multiplier, 1.0, "direct")
-            
-            # Special pig resistances
-            if pig.pig_type == "helmet":
-                damage *= 0.5  # Helmets provide protection
-            elif pig.pig_type == "king":
-                damage *= 0.7  # Kings are tougher
-            
-            # Apply damage
-            if pig.take_damage(damage):
-                self.score_earned += SCORE_VALUES["pig_eliminated"]
-                self.collision_events.append(("pig_eliminated", pig.body.position))
-                # Start combo
-                self.combo_multiplier = min(self.combo_multiplier + 0.2, 3.0)
-                self.combo_timer = 60  # 1 second at 60 FPS
+            if hasattr(arbiter, 'total_impulse'):
+                impulse = arbiter.total_impulse.length
             else:
-                self.score_earned += SCORE_VALUES["bird_hit_pig"]
+                impulse = 100  # Default impulse if not available
+            
+            # Base damage calculation
+            damage = max(20, impulse / 10)  # Minimum 20 damage
+            
+            # Apply pig type modifiers
+            if pig.pig_type == "helmet":
+                damage *= 0.7
+            elif pig.pig_type == "king":
+                damage *= 0.8
+            
+            print(f"Bird-Pig collision! Impulse: {impulse}, Damage: {damage}")
+            
+            if pig.take_damage(damage):
+                self.score_earned += 500  # Pig eliminated
+                self.collision_events.append(("pig_eliminated", pig.body.position))
+                print(f"PIG ELIMINATED! +500 points")
+            else:
+                self.score_earned += 10  # Pig hit
                 self.collision_events.append(("pig_hit", pig.body.position))
+                print(f"Pig hit! +10 points")
             
             return True
         
         def bird_block_collision(arbiter, space, data):
+            """Enhanced bird-block collision with material consideration"""
             bird_shape, block_shape = arbiter.shapes
             
-            # Find objects
-            bird = None
-            for b in self.birds:
-                if hasattr(b, 'shape') and b.shape == bird_shape:
-                    bird = b
-                    break
-            
+            # Find the block object
             block = None
             for bl in self.blocks:
                 if bl.shape == block_shape:
                     block = bl
                     break
             
-            if not bird or not block:
+            if not block or block.destroyed:
                 return True
             
             # Calculate impact force
-            force = self.calculate_impact_force(arbiter, bird.mass, block.mass)
-            
-            # Get bird and material multipliers
-            bird_multiplier = DAMAGE_MULTIPLIERS.get(bird.bird_type, 1.0)
-            
-            # Special interactions
-            if bird.bird_type == "yellow" and block.material == "wood":
-                bird_multiplier *= 2.0  # Yellow birds demolish wood
-            elif bird.bird_type == "blue" and block.material == "ice":
-                bird_multiplier *= 2.5  # Blue birds shatter ice
-            
-            # Get material resistance
-            material_props = MATERIAL_PROPERTIES.get(block.material, MATERIAL_PROPERTIES["wood"])
-            resistance = material_props["damage_resistance"]
-            
-            # Calculate damage
-            damage = self.calculate_damage(force * bird_multiplier, resistance, "direct")
-            
-            # Check for structural weakness
-            if damage > material_props["stability_threshold"]:
-                # Structural failure - extra damage
-                damage *= 1.5
-                supported = self.check_structural_stability(block)
-                if supported:
-                    self.score_earned += SCORE_VALUES["structure_collapsed"]
-                    # Damage supported blocks
-                    for sup_block in supported:
-                        sup_block.take_damage(20)
-            
-            # Apply damage
-            if block.take_damage(damage):
-                self.score_earned += SCORE_VALUES["block_destroyed"]
-                self.collision_events.append(("block_destroyed", block.body.position))
-                
-                # Trigger chain reaction for certain materials
-                if block.material in ["ice", "wood"]:
-                    self.trigger_chain_reaction(
-                        (block.body.position.x, block.body.position.y),
-                        force * 0.5,
-                        radius=80 if block.material == "ice" else 60
-                    )
-                
-                # Combo bonus
-                self.combo_multiplier = min(self.combo_multiplier + 0.1, 3.0)
-                self.combo_timer = 60
+            if hasattr(arbiter, 'total_impulse'):
+                impulse = arbiter.total_impulse.length
             else:
-                self.score_earned += SCORE_VALUES["block_damaged"]
+                impulse = 80  # Default impulse
+            
+            # Base damage calculation
+            damage = max(15, impulse / 15)  # Minimum 15 damage
+            
+            # Apply material resistance
+            material_resistance = MATERIAL_DAMAGE_RESISTANCE.get(block.material, 1.0)
+            damage = damage / material_resistance
+            
+            print(f"Bird-Block collision! Material: {block.material}, Damage: {damage}")
+            
+            if block.take_damage(damage):
+                self.score_earned += 100  # Block destroyed
+                self.collision_events.append(("block_destroyed", block.body.position))
+                print(f"BLOCK DESTROYED! +100 points")
+            else:
+                self.score_earned += 5  # Block hit
                 self.collision_events.append(("block_hit", block.body.position))
+                print(f"Block hit! +5 points")
             
             return True
         
         def block_pig_collision(arbiter, space, data):
+            """Falling blocks do extra damage - Logic Point 7"""
             block_shape, pig_shape = arbiter.shapes
             
-            # Find objects
-            block = None
-            for bl in self.blocks:
-                if bl.shape == block_shape:
-                    block = bl
+            # Find the block for mass calculation
+            block_mass = 1
+            block_velocity = 0
+            for block in self.blocks:
+                if block.shape == block_shape:
+                    block_mass = block.mass
+                    block_velocity = abs(block.body.velocity.y)
                     break
             
-            pig = None
-            for p in self.pigs:
-                if p.shape == pig_shape:
-                    pig = p
+            # Find the pig object
+            for pig in self.pigs:
+                if pig.shape == pig_shape:
+                    if should_apply_damage(id(pig)):
+                        # Falling blocks do more damage based on velocity and mass
+                        damage = calculate_impact_damage(arbiter, block_mass, 2, 1.2)
+                        
+                        # Extra damage if block is falling from height - Logic Point 7
+                        if block_velocity > 100:
+                            damage *= 1.5 + (block_velocity / 500)  # Scale with fall speed
+                        
+                        if damage > 0:
+                            if pig.take_damage(damage):
+                                self.score_earned += 300  # Pig crushed
+                                self.collision_events.append(("pig_crushed", pig.body.position))
                     break
-            
-            if not block or not pig:
-                return True
-            
-            # Calculate crushing force
-            force = self.calculate_impact_force(arbiter, block.mass, 2)
-            
-            # Falling blocks do more damage
-            if block.body.velocity.y > 50:
-                impact_type = "crush"
-                force *= 1.5 + (block.body.velocity.y / 200)
-            else:
-                impact_type = "direct"
-            
-            # Heavy materials crush better
-            material_props = MATERIAL_PROPERTIES.get(block.material, MATERIAL_PROPERTIES["wood"])
-            force *= material_props["mass_multiplier"]
-            
-            damage = self.calculate_damage(force, 0.8, impact_type)
-            
-            if pig.take_damage(damage):
-                self.score_earned += SCORE_VALUES["pig_crushed"]
-                self.collision_events.append(("pig_crushed", pig.body.position))
-                self.combo_multiplier = min(self.combo_multiplier + 0.3, 3.0)
-                self.combo_timer = 60
-            else:
-                self.score_earned += SCORE_VALUES["pig_damaged"]
-            
             return True
         
         def block_block_collision(arbiter, space, data):
-            """Enhanced block-to-block collisions with realistic physics"""
+            """Blocks damage each other on impact - Logic Point 6"""
             block1_shape, block2_shape = arbiter.shapes
             
-            blocks_involved = []
             for block in self.blocks:
                 if block.shape in [block1_shape, block2_shape]:
-                    blocks_involved.append(block)
-            
-            if len(blocks_involved) < 2:
-                return True
-            
-            block1, block2 = blocks_involved[0], blocks_involved[1]
-            
-            # Calculate collision force
-            force = self.calculate_impact_force(arbiter, block1.mass, block2.mass)
-            
-            # Both blocks take damage based on material
-            for block, other in [(block1, block2), (block2, block1)]:
-                material_props = MATERIAL_PROPERTIES.get(block.material, MATERIAL_PROPERTIES["wood"])
-                other_props = MATERIAL_PROPERTIES.get(other.material, MATERIAL_PROPERTIES["wood"])
-                
-                # Harder materials damage softer ones more
-                hardness_factor = other_props["damage_resistance"] / material_props["damage_resistance"]
-                
-                damage = self.calculate_damage(
-                    force * hardness_factor * 0.3,
-                    material_props["damage_resistance"],
-                    "shear"
-                )
-                
-                # Ice shatters on impact
-                if block.material == "ice" and force > 500:
-                    damage *= 3
-                
-                if block.take_damage(damage):
-                    self.score_earned += SCORE_VALUES["block_destroyed"] // 2
-                    self.collision_events.append(("block_collapsed", block.body.position))
-            
+                    # Get the other block's mass for damage calculation
+                    other_mass = 1
+                    for other_block in self.blocks:
+                        if other_block.shape != block.shape and other_block.shape in [block1_shape, block2_shape]:
+                            other_mass = other_block.mass
+                            break
+                    
+                    if should_apply_damage(id(block)):
+                        # Materials take different damage from collisions - Logic Point 6
+                        material_resistance = MATERIAL_DAMAGE_RESISTANCE.get(block.material, 1.0)
+                        damage = calculate_impact_damage(arbiter, block.mass, other_mass, 0.5)
+                        damage = damage / material_resistance
+                        
+                        # Ice blocks are extra fragile to impacts - Logic Point 6
+                        if block.material == "ice":
+                            damage *= 2
+                        
+                        if damage > 0:
+                            if block.take_damage(damage):
+                                self.score_earned += 50
+                                self.collision_events.append(("block_collapsed", block.body.position))
             return True
         
         def pig_ground_collision(arbiter, space, data):
-            """Pigs take realistic fall damage"""
+            """Pigs take fall damage when hitting ground hard - Logic Point 7"""
             pig_shape, ground_shape = arbiter.shapes
             
             for pig in self.pigs:
                 if pig.shape == pig_shape:
-                    # Check fall velocity
-                    fall_speed = abs(pig.body.velocity.y)
-                    
-                    # Damage threshold based on pig type
-                    threshold = 250
-                    if pig.pig_type == "helmet":
-                        threshold = 350  # Helmets protect from falls
-                    elif pig.pig_type == "king":
-                        threshold = 300
-                    
-                    if fall_speed > threshold:
-                        damage = (fall_speed - threshold) / 5
-                        
-                        if pig.take_damage(damage):
-                            self.score_earned += SCORE_VALUES["pig_fall_damage"]
-                            self.collision_events.append(("pig_fell", pig.body.position))
+                    if should_apply_damage(id(pig)):
+                        # Check fall velocity
+                        fall_speed = abs(pig.body.velocity.y)
+                        if fall_speed > 300:  # Falling fast enough to take damage
+                            damage = (fall_speed - 300) / 10
+                            
+                            # Heavier pigs take more fall damage
+                            if pig.pig_type == "king":
+                                damage *= 1.2
+                            
+                            if damage > 0:
+                                if pig.take_damage(damage):
+                                    self.score_earned += 200  # Fall damage elimination
+                                    self.collision_events.append(("pig_fell", pig.body.position))
                     break
-            
             return True
         
         def block_ground_collision(arbiter, space, data):
-            """Blocks can shatter from high falls"""
+            """Blocks can shatter from falling - Logic Point 6"""
             block_shape, ground_shape = arbiter.shapes
             
             for block in self.blocks:
                 if block.shape == block_shape:
-                    fall_speed = abs(block.body.velocity.y)
-                    material_props = MATERIAL_PROPERTIES.get(block.material, MATERIAL_PROPERTIES["wood"])
-                    
-                    # Different materials have different fall damage thresholds
-                    thresholds = {
-                        "ice": 200,    # Ice shatters easily
-                        "wood": 400,   # Wood can splinter
-                        "stone": 600,  # Stone is durable
-                        "metal": 800   # Metal is very durable
-                    }
-                    
-                    threshold = thresholds.get(block.material, 400)
-                    
-                    if fall_speed > threshold:
-                        # Damage increases with speed and decreases with resistance
-                        damage = ((fall_speed - threshold) / 10) / material_props["damage_resistance"]
-                        
-                        # Ice completely shatters on hard impact
-                        if block.material == "ice":
-                            damage *= 5
+                    if should_apply_damage(id(block)):
+                        # Check fall velocity
+                        fall_speed = abs(block.body.velocity.y)
+                        if fall_speed > 400:  # Falling very fast
+                            material_resistance = MATERIAL_DAMAGE_RESISTANCE.get(block.material, 1.0)
+                            damage = (fall_speed - 400) / (5 * material_resistance)
                             
-                            if block.take_damage(damage):
-                                self.score_earned += SCORE_VALUES["block_shattered"]
-                                self.collision_events.append(("block_shattered", block.body.position))
-                                # Ice explosion effect
-                                self.trigger_chain_reaction(
-                                    (block.body.position.x, block.body.position.y),
-                                    fall_speed * 0.2,
-                                    radius=100
-                                )
-                        else:
-                            if block.take_damage(damage):
-                                self.score_earned += SCORE_VALUES["block_destroyed"] // 2
-                                self.collision_events.append(("block_shattered", block.body.position))
+                            # Ice shatters easily from falls - Logic Point 6
+                            if block.material == "ice" and fall_speed > 250:
+                                damage *= 3
+                            
+                            if damage > 0:
+                                if block.take_damage(damage):
+                                    self.score_earned += 25
+                                    self.collision_events.append(("block_shattered", block.body.position))
                     break
-            
             return True
         
-        # Register all collision handlers
+        # Register collision handlers
         try:
-            # Bird-Pig
-            handler = self.space.add_collision_handler(COLLISION_TYPE_BIRD, COLLISION_TYPE_PIG)
-            handler.post_solve = bird_pig_collision
+            # Bird-Pig collisions
+            handler = self.space.add_collision_handler(
+                COLLISION_TYPE_BIRD, COLLISION_TYPE_PIG
+            )
+            handler.pre_solve = bird_pig_collision
             
-            # Bird-Block
-            handler = self.space.add_collision_handler(COLLISION_TYPE_BIRD, COLLISION_TYPE_BLOCK)
-            handler.post_solve = bird_block_collision
+            # Bird-Block collisions
+            handler = self.space.add_collision_handler(
+                COLLISION_TYPE_BIRD, COLLISION_TYPE_BLOCK
+            )
+            handler.pre_solve = bird_block_collision
             
-            # Block-Pig
-            handler = self.space.add_collision_handler(COLLISION_TYPE_BLOCK, COLLISION_TYPE_PIG)
-            handler.post_solve = block_pig_collision
+            # Block-Pig collisions
+            handler = self.space.add_collision_handler(
+                COLLISION_TYPE_BLOCK, COLLISION_TYPE_PIG
+            )
+            handler.pre_solve = block_pig_collision
             
-            # Block-Block
-            handler = self.space.add_collision_handler(COLLISION_TYPE_BLOCK, COLLISION_TYPE_BLOCK)
-            handler.post_solve = block_block_collision
+            # Block-Block collisions
+            handler = self.space.add_collision_handler(
+                COLLISION_TYPE_BLOCK, COLLISION_TYPE_BLOCK
+            )
+            handler.pre_solve = block_block_collision
             
-            # Pig-Ground
-            handler = self.space.add_collision_handler(COLLISION_TYPE_PIG, COLLISION_TYPE_GROUND)
-            handler.post_solve = pig_ground_collision
+            # Pig-Ground collisions (fall damage)
+            handler = self.space.add_collision_handler(
+                COLLISION_TYPE_PIG, COLLISION_TYPE_GROUND
+            )
+            handler.pre_solve = pig_ground_collision
             
-            # Block-Ground
-            handler = self.space.add_collision_handler(COLLISION_TYPE_BLOCK, COLLISION_TYPE_GROUND)
-            handler.post_solve = block_ground_collision
+            # Block-Ground collisions (shatter on impact)
+            handler = self.space.add_collision_handler(
+                COLLISION_TYPE_BLOCK, COLLISION_TYPE_GROUND
+            )
+            handler.pre_solve = block_ground_collision
             
-        except AttributeError:
-            print("Warning: Collision handlers not supported, using fallback")
-            # Fallback handled in simple_physics.py
+            print("Collision handlers registered successfully!")
+            
+        except AttributeError as e:
+            # Fallback for older pymunk versions
+            print(f"Warning: Could not register collision handlers: {e}")
+            print("Using fallback collision detection")
+            self.manual_collisions = True
     
     def add_bird(self, bird):
-        """Register a bird for physics tracking"""
+        """Register a bird for tracking"""
         if bird not in self.birds:
             self.birds.append(bird)
     
     def remove_bird(self, bird):
-        """Remove a bird from physics tracking"""
+        """Remove a bird from tracking"""
         if bird in self.birds:
             self.birds.remove(bird)
     
     def step(self, dt):
-        """Advance physics simulation with enhanced features"""
-        # Clear events from last frame
+        """Advance physics simulation with proper timestep - Logic Point 11"""
+        # Clear collision events from last frame
         self.collision_events = []
         
-        # Update combo timer
-        if self.combo_timer > 0:
-            self.combo_timer -= 1
-            if self.combo_timer == 0:
-                self.combo_multiplier = 1.0
+        # Apply air drag to flying birds - Logic Point 5
+        for bird in self.birds:
+            if hasattr(bird, 'body') and bird.launched:
+                bird.body.velocity = (
+                    bird.body.velocity.x * AIR_DRAG,
+                    bird.body.velocity.y * AIR_DRAG
+                )
         
-        # Store velocities for next frame
-        for block in self.blocks:
-            if not block.destroyed and hasattr(block, 'body'):
-                self.previous_velocities[id(block)] = block.body.velocity
-        
-        # Step physics
+        # Step physics with fixed timestep
         self.space.step(dt)
         
-        # Check for unstable structures
-        self._check_structural_integrity()
+        # Manual collision detection as backup
+        if self.manual_collisions or True:  # Always check manually for now
+            self._check_manual_collisions()
+        
+        # Manual velocity damping for performance (instead of sleeping)
+        self._apply_velocity_damping()
     
-    def _check_structural_integrity(self):
-        """Check for unstable structures that should collapse"""
-        for block in self.blocks:
-            if block.destroyed or not hasattr(block, 'body'):
+    def _check_manual_collisions(self):
+        """Manual collision detection between birds, pigs, and blocks"""
+        # Check bird-pig collisions
+        for bird in self.birds:
+            if not hasattr(bird, 'body'):
+                continue
+                
+            bird_pos = bird.body.position
+            bird_vel = bird.body.velocity.length
+            
+            # Only check if bird is moving fast enough
+            if bird_vel < 50:
                 continue
             
-            # Check if block is tilting too much
-            angle = abs(block.body.angle)
-            if angle > math.pi / 4:  # More than 45 degrees
-                # Tilted blocks are unstable
-                material_props = MATERIAL_PROPERTIES.get(block.material, MATERIAL_PROPERTIES["wood"])
-                if angle > math.pi / 3:  # More than 60 degrees
-                    block.take_damage(10 / material_props["damage_resistance"])
+            for pig in self.pigs:
+                if pig.dead:
+                    continue
+                    
+                pig_pos = pig.body.position
+                distance = math.sqrt((bird_pos.x - pig_pos.x)**2 + (bird_pos.y - pig_pos.y)**2)
+                
+                # Check if colliding
+                if distance < (bird.radius + pig.radius):
+                    # Calculate damage based on velocity
+                    damage = min(100, bird_vel / 5)
+                    
+                    # Apply pig type modifiers
+                    if pig.pig_type == "helmet":
+                        damage *= 0.7
+                    elif pig.pig_type == "king":
+                        damage *= 0.8
+                    
+                    if damage > 10:  # Minimum damage threshold
+                        print(f"MANUAL HIT: Bird hit pig for {damage:.1f} damage!")
+                        
+                        if pig.take_damage(damage):
+                            self.score_earned += 500
+                            self.collision_events.append(("pig_eliminated", pig_pos))
+                        else:
+                            self.score_earned += 10
+                            self.collision_events.append(("pig_hit", pig_pos))
+                        
+                        # Reduce bird velocity after hit
+                        bird.body.velocity = (bird.body.velocity.x * 0.5, bird.body.velocity.y * 0.5)
+            
+            # Check bird-block collisions
+            for block in self.blocks:
+                if block.destroyed:
+                    continue
+                
+                block_pos = block.body.position
+                
+                # Simple distance check to block center
+                dx = abs(bird_pos.x - block_pos.x)
+                dy = abs(bird_pos.y - block_pos.y)
+                
+                # Check if within block bounds
+                if dx < (block.width/2 + bird.radius) and dy < (block.height/2 + bird.radius):
+                    # Calculate damage
+                    damage = min(80, bird_vel / 8)
+                    
+                    # Apply material resistance
+                    material_resistance = MATERIAL_DAMAGE_RESISTANCE.get(block.material, 1.0)
+                    damage = damage / material_resistance
+                    
+                    if damage > 5:  # Minimum damage threshold
+                        print(f"MANUAL HIT: Bird hit {block.material} block for {damage:.1f} damage!")
+                        
+                        if block.take_damage(damage):
+                            self.score_earned += 100
+                            self.collision_events.append(("block_destroyed", block_pos))
+                        else:
+                            self.score_earned += 5
+                            self.collision_events.append(("block_hit", block_pos))
+                        
+                        # Reduce bird velocity after hit
+                        bird.body.velocity = (bird.body.velocity.x * 0.7, bird.body.velocity.y * 0.7)
+        
+    def _apply_velocity_damping(self):
+        """Apply velocity damping to slow objects for performance"""
+        VELOCITY_THRESHOLD = 5  # Units per second
+        DAMPING_FACTOR = 0.95
+        
+        for body in self.space.bodies:
+            if body.body_type == pymunk.Body.DYNAMIC:
+                velocity = body.velocity.length
+                
+                # Apply damping to very slow objects
+                if velocity < VELOCITY_THRESHOLD and velocity > 0:
+                    body.velocity = (
+                        body.velocity.x * DAMPING_FACTOR,
+                        body.velocity.y * DAMPING_FACTOR
+                    )
+                    
+                    # Also damp angular velocity
+                    if hasattr(body, 'angular_velocity'):
+                        body.angular_velocity *= DAMPING_FACTOR
     
     def get_and_reset_score(self):
-        """Get earned score with combo multiplier and reset"""
-        final_score = int(self.score_earned * self.combo_multiplier)
+        """Get earned score and reset counter"""
+        score = self.score_earned
         self.score_earned = 0
-        return final_score
+        return score
     
     def get_collision_events(self):
         """Get collision events for visual effects"""
         events = self.collision_events[:]
         self.collision_events = []
         return events
-    
-    def get_combo_info(self):
-        """Get current combo multiplier for UI display"""
-        if self.combo_timer > 0:
-            return self.combo_multiplier
-        return 1.0
+        
+    def remove_body(self, body, shape):
+        """Safely remove a body and shape from the space"""
+        try:
+            self.space.remove(body, shape)
+            # Clean up tracking
+            body_id = id(body)
+            if body_id in self.last_damage_time:
+                del self.last_damage_time[body_id]
+        except:
+            pass

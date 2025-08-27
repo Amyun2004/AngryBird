@@ -10,6 +10,20 @@ class LevelBuilder:
     """Builds different level configurations"""
     
     @staticmethod
+    def create_debug_level(space):
+        """A minimal level for debugging with just one block and one pig."""
+        blocks = []
+        pigs = []
+        
+        # Add one single block
+        blocks.append(Block(space, 800, WIN_HEIGHT - GROUND_HEIGHT - 40, 40, 40, "wood"))
+        
+        # Add one single pig
+        pigs.append(Pig(space, 900, WIN_HEIGHT - GROUND_HEIGHT - 20))
+        
+        return blocks, pigs
+    
+    @staticmethod
     def create_level(space, level_num=1):
         """Create a level based on level number"""
         if level_num == 1:

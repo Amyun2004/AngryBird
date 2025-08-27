@@ -1,5 +1,5 @@
 """
-entities.py - Game entities including Birds, Pigs, and Blocks
+entities.py - Game entities with enhanced damage visualization
 """
 
 import pygame
@@ -33,6 +33,9 @@ class Bird:
         self.shape.collision_type = COLLISION_TYPE_BIRD
         self.shape.filter = pymunk.ShapeFilter(categories=BIRD_CATEGORY)
         
+        # Store reference to this bird in the shape
+        self.shape.bird = self
+        
         space.add(self.body, self.shape)
         
     def launch(self, velocity):
@@ -61,7 +64,8 @@ class Bird:
         on_ground = self.body.position.y >= (WIN_HEIGHT - GROUND_HEIGHT - self.radius - 2)
 
         # Require both: very slow *and* on the ground
-        return vel < 5 and on_ground           
+        return vel < 5 and on_ground
+        
     def draw(self, screen):
         """Draw the bird"""
         # Check for valid position
@@ -132,6 +136,7 @@ class Pig:
         self.space = space
         self.dead = False
         self.pig_type = pig_type
+        self.damage_flash = 0  # For visual feedback when hit
         
         # Different pig types
         if pig_type == "helmet":
@@ -156,22 +161,30 @@ class Pig:
         self.shape.collision_type = COLLISION_TYPE_PIG
         self.shape.filter = pymunk.ShapeFilter(categories=PIG_CATEGORY)
         
+        # Store reference to this pig in the shape
+        self.shape.pig = self
+        
         space.add(self.body, self.shape)
         
     def take_damage(self, damage):
-        """Apply damage to the pig"""
+        """Apply damage to the pig with visual feedback"""
         if self.dead:
             return False
             
         self.health -= damage
+        self.damage_flash = 10  # Flash for 10 frames
+        
+        print(f"Pig took {damage:.1f} damage! Health: {self.health:.1f}/{self.max_health}")
+        
         if self.health <= 0 and not self.dead:
             self.dead = True
             self.space.remove(self.body, self.shape)
+            print(f"Pig eliminated! Type: {self.pig_type}")
             return True  # Pig eliminated
         return False  # Pig still alive
         
     def draw(self, screen):
-        """Draw the pig"""
+        """Draw the pig with damage visualization"""
         if not self.dead:
             # Check for valid position
             x, y = self.body.position.x, self.body.position.y
@@ -182,13 +195,20 @@ class Pig:
             
             pos = int(x), int(y)
             
+            # Flash red when taking damage
+            if self.damage_flash > 0:
+                self.damage_flash -= 1
+                flash_color = (255, 100, 100)  # Red flash
+            else:
+                flash_color = None
+            
             # Body color based on health
             if self.health > self.max_health * 0.7:
-                color = PIG_COLOR
+                color = PIG_COLOR if not flash_color else flash_color
             elif self.health > self.max_health * 0.3:
-                color = (120, 200, 120)  # Damaged
+                color = (120, 200, 120) if not flash_color else flash_color  # Damaged
             else:
-                color = (100, 180, 100)  # Heavily damaged
+                color = (100, 180, 100) if not flash_color else flash_color  # Heavily damaged
             
             # Draw main body
             pygame.draw.circle(screen, color, pos, self.radius)
@@ -236,21 +256,28 @@ class Pig:
             pygame.draw.circle(screen, BLACK, eye_left, 2)
             pygame.draw.circle(screen, BLACK, eye_right, 2)
             
-            # Draw health bar if damaged
+            # Always draw health bar to show damage
+            bar_width = 30
+            bar_height = 4
+            bar_x = pos[0] - bar_width // 2
+            bar_y = pos[1] - self.radius - 10
+            
+            # Background (red)
+            pygame.draw.rect(screen, RED, (bar_x, bar_y, bar_width, bar_height))
+            # Health (green)
+            health_percentage = self.health / self.max_health
+            pygame.draw.rect(screen, GREEN, 
+                           (bar_x, bar_y, bar_width * health_percentage, bar_height))
+            # Border
+            pygame.draw.rect(screen, BLACK, (bar_x, bar_y, bar_width, bar_height), 1)
+            
+            # Show health numbers when damaged
             if self.health < self.max_health:
-                bar_width = 30
-                bar_height = 4
-                bar_x = pos[0] - bar_width // 2
-                bar_y = pos[1] - self.radius - 10
-                
-                # Background (red)
-                pygame.draw.rect(screen, RED, (bar_x, bar_y, bar_width, bar_height))
-                # Health (green)
-                health_percentage = self.health / self.max_health
-                pygame.draw.rect(screen, GREEN, 
-                               (bar_x, bar_y, bar_width * health_percentage, bar_height))
-                # Border
-                pygame.draw.rect(screen, BLACK, (bar_x, bar_y, bar_width, bar_height), 1)
+                font = pygame.font.Font(None, 16)
+                health_text = f"{int(self.health)}/{int(self.max_health)}"
+                text = font.render(health_text, True, WHITE)
+                text_rect = text.get_rect(center=(pos[0], bar_y - 10))
+                screen.blit(text, text_rect)
 
 
 class Block:
@@ -262,6 +289,7 @@ class Block:
         self.material = material
         self.space = space
         self.destroyed = False
+        self.damage_flash = 0  # For visual feedback
         
         # Material properties
         materials = {
@@ -318,28 +346,37 @@ class Block:
         self.shape.collision_type = COLLISION_TYPE_BLOCK
         self.shape.filter = pymunk.ShapeFilter(categories=BLOCK_CATEGORY)
         
+        # Store reference to this block in the shape
+        self.shape.block = self
+        
         space.add(self.body, self.shape)
         
     def take_damage(self, damage):
-        """Apply damage to the block"""
+        """Apply damage to the block with visual feedback"""
         if self.destroyed:
             return False
             
         self.health -= damage
+        self.damage_flash = 5  # Flash for 5 frames
+        
+        print(f"{self.material} block took {damage:.1f} damage! Health: {self.health:.1f}/{self.max_health}")
         
         # Update color based on damage
-        if self.health < self.max_health * 0.5:
+        health_ratio = self.health / self.max_health
+        if health_ratio < 0.5:
             # Darken when damaged
-            self.color = tuple(max(0, c - 50) for c in self.original_color)
+            darken_factor = health_ratio * 2  # 0 to 1
+            self.color = tuple(int(c * darken_factor) for c in self.original_color)
         
         if self.health <= 0:
             self.destroyed = True
             self.space.remove(self.body, self.shape)
+            print(f"{self.material} block destroyed!")
             return True  # Block destroyed
         return False  # Block still intact
         
     def draw(self, screen):
-        """Draw the block"""
+        """Draw the block with damage visualization"""
         if not self.destroyed:
             # Check for valid position
             x, y = self.body.position.x, self.body.position.y
@@ -360,9 +397,30 @@ class Block:
             if len(vertices) < 3:
                 return  # Not enough valid vertices to draw
             
+            # Flash when taking damage
+            if self.damage_flash > 0:
+                self.damage_flash -= 1
+                draw_color = tuple(min(255, c + 50) for c in self.color)  # Brighten
+            else:
+                draw_color = self.color
+            
             # Draw the block
-            pygame.draw.polygon(screen, self.color, vertices)
+            pygame.draw.polygon(screen, draw_color, vertices)
             pygame.draw.polygon(screen, BLACK, vertices, 2)
+            
+            # Draw cracks when damaged
+            if self.health < self.max_health * 0.7 and len(vertices) >= 4:
+                center_x = sum(v[0] for v in vertices) // 4
+                center_y = sum(v[1] for v in vertices) // 4
+                
+                # Draw crack lines
+                if self.health < self.max_health * 0.5:
+                    pygame.draw.line(screen, BLACK, vertices[0], (center_x, center_y), 1)
+                    pygame.draw.line(screen, BLACK, vertices[2], (center_x, center_y), 1)
+                
+                if self.health < self.max_health * 0.3:
+                    pygame.draw.line(screen, BLACK, vertices[1], (center_x, center_y), 1)
+                    pygame.draw.line(screen, BLACK, vertices[3], (center_x, center_y), 1)
             
             # Draw material-specific textures
             if self.material == "wood" and len(vertices) >= 4:
@@ -372,18 +430,7 @@ class Block:
                     start_y = vertices[0][1] + (vertices[1][1] - vertices[0][1]) * i / 3
                     end_x = vertices[3][0] + (vertices[2][0] - vertices[3][0]) * i / 3
                     end_y = vertices[3][1] + (vertices[2][1] - vertices[3][1]) * i / 3
-                    pygame.draw.line(screen, BROWN, (start_x, start_y), (end_x, end_y), 1)
-                    
-            elif self.material == "stone" and len(vertices) >= 4:
-                # Stone cracks when damaged
-                if self.health < self.max_health * 0.7:
-                    center_x = sum(v[0] for v in vertices) // 4
-                    center_y = sum(v[1] for v in vertices) // 4
-                    # Draw crack lines
-                    pygame.draw.line(screen, DARK_GRAY, 
-                                   vertices[0], (center_x, center_y), 1)
-                    pygame.draw.line(screen, DARK_GRAY, 
-                                   vertices[2], (center_x, center_y), 1)
+                    pygame.draw.line(screen, BROWN, (int(start_x), int(start_y)), (int(end_x), int(end_y)), 1)
                     
             elif self.material == "ice":
                 # Ice transparency effect (lighter center)
@@ -395,4 +442,5 @@ class Block:
                         inner_x = v[0] + (center_x - v[0]) * 0.3
                         inner_y = v[1] + (center_y - v[1]) * 0.3
                         inner_vertices.append((inner_x, inner_y))
-                    pygame.draw.polygon(screen, (200, 240, 245), inner_vertices)
+                    if not self.damage_flash:
+                        pygame.draw.polygon(screen, (200, 240, 245), inner_vertices)
