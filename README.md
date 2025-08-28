@@ -35,6 +35,9 @@ Features **dynamic castles**, **multiple bird types**, **special pig types**, co
 - HUD with score, pigs & birds left, combo indicator  
 - Level intro & tips per level  
 - Game Over screen with **star ratings**  
+<img width="1492" height="908" alt="image" src="https://github.com/user-attachments/assets/87b9ca5e-cd78-4df3-bce3-8630f1780feb" />
+<img width="1496" height="868" alt="image" src="https://github.com/user-attachments/assets/3820fea4-52b4-4603-a4bb-1c57ac1009b4" />
+
 
 ---
 
