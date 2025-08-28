@@ -382,48 +382,69 @@ class PhysicsEngine:
             self.birds.remove(bird)
     
     def step(self, dt):
-        """Advance physics simulation with proper timestep - Logic Point 11"""
+        """Advance physics simulation with proper timestep"""
         # Clear collision events from last frame
         self.collision_events = []
         
-        # Apply air drag to flying birds - Logic Point 5
-        for bird in self.birds:
+        # Apply air drag to flying birds
+        for bird in self.birds[:]:  # Use slice to avoid modification issues
             if hasattr(bird, 'body') and bird.launched:
-                bird.body.velocity = (
-                    bird.body.velocity.x * AIR_DRAG,
-                    bird.body.velocity.y * AIR_DRAG
-                )
+                try:
+                    bird.body.velocity = (
+                        bird.body.velocity.x * AIR_DRAG,
+                        bird.body.velocity.y * AIR_DRAG
+                    )
+                except:
+                    pass
         
-        # Step physics with fixed timestep
-        self.space.step(dt)
+        # Step physics with error handling
+        try:
+            self.space.step(dt)
+        except Exception as e:
+            print(f"Physics step error: {e}")
+            return
         
-        # Manual collision detection as backup
-        if self.manual_collisions or True:  # Always check manually for now
+        # Manual collision detection as backup (disabled by default)
+        if self.manual_collisions:
             self._check_manual_collisions()
         
-        # Manual velocity damping for performance (instead of sleeping)
+        # Manual velocity damping for performance
         self._apply_velocity_damping()
     
     def _check_manual_collisions(self):
         """Manual collision detection between birds, pigs, and blocks"""
+        # Limit iterations to prevent infinite loops
+        max_checks = 100
+        checks = 0
+        
         # Check bird-pig collisions
-        for bird in self.birds:
+        for bird in self.birds[:]:  # Use slice to avoid modification issues
+            if checks > max_checks:
+                break
+            checks += 1
+            
             if not hasattr(bird, 'body'):
                 continue
                 
-            bird_pos = bird.body.position
-            bird_vel = bird.body.velocity.length
+            try:
+                bird_pos = bird.body.position
+                bird_vel = bird.body.velocity.length
+            except:
+                continue
             
             # Only check if bird is moving fast enough
             if bird_vel < 50:
                 continue
             
-            for pig in self.pigs:
+            for pig in self.pigs[:]:  # Use slice
                 if pig.dead:
                     continue
                     
-                pig_pos = pig.body.position
-                distance = math.sqrt((bird_pos.x - pig_pos.x)**2 + (bird_pos.y - pig_pos.y)**2)
+                try:
+                    pig_pos = pig.body.position
+                    distance = math.sqrt((bird_pos.x - pig_pos.x)**2 + (bird_pos.y - pig_pos.y)**2)
+                except:
+                    continue
                 
                 # Check if colliding
                 if distance < (bird.radius + pig.radius):
@@ -448,17 +469,21 @@ class PhysicsEngine:
                         
                         # Reduce bird velocity after hit
                         bird.body.velocity = (bird.body.velocity.x * 0.5, bird.body.velocity.y * 0.5)
+                        break  # Only one collision per frame
             
             # Check bird-block collisions
-            for block in self.blocks:
+            for block in self.blocks[:]:  # Use slice
                 if block.destroyed:
                     continue
                 
-                block_pos = block.body.position
-                
-                # Simple distance check to block center
-                dx = abs(bird_pos.x - block_pos.x)
-                dy = abs(bird_pos.y - block_pos.y)
+                try:
+                    block_pos = block.body.position
+                    
+                    # Simple distance check to block center
+                    dx = abs(bird_pos.x - block_pos.x)
+                    dy = abs(bird_pos.y - block_pos.y)
+                except:
+                    continue
                 
                 # Check if within block bounds
                 if dx < (block.width/2 + bird.radius) and dy < (block.height/2 + bird.radius):
@@ -481,6 +506,7 @@ class PhysicsEngine:
                         
                         # Reduce bird velocity after hit
                         bird.body.velocity = (bird.body.velocity.x * 0.7, bird.body.velocity.y * 0.7)
+                        break  # Only one collision per frame
         
     def _apply_velocity_damping(self):
         """Apply velocity damping to slow objects for performance"""

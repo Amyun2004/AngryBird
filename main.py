@@ -1,7 +1,3 @@
-"""
-main.py - Main game file for Angry Birds with Pymunk physics
-Fixed level loading and bird selection issues
-"""
 
 import pygame
 import sys
@@ -49,7 +45,7 @@ class AngryBirdsGame:
     def __init__(self):
         pygame.init()
         self.screen = pygame.display.set_mode((WIN_WIDTH, WIN_HEIGHT))
-        pygame.display.set_caption("Angry Birds - Pymunk Physics Edition")
+        pygame.display.set_caption("Angry Birds - Pymunk Physics")
         self.clock = pygame.time.Clock()
         
         # Game components
@@ -64,7 +60,7 @@ class AngryBirdsGame:
         self.current_level = 1
         self.score = 0
         self.total_score = 0
-        self.combo_timer = 0  # Logic Point 8: Combo system
+        self.combo_timer = 0
         self.combo_multiplier = 1
         
         # Level objects
@@ -101,7 +97,7 @@ class AngryBirdsGame:
         self.physics_dt = 1/60.0
         
     def reset_level(self, level_num=None):
-        """Reset the current level with improved structure settling"""
+        """Reset the current level"""
         if level_num:
             self.current_level = level_num
             
@@ -122,15 +118,17 @@ class AngryBirdsGame:
         self.reload_timer = 0
         self.bird_state = BirdState.IDLE
         
-        # Create the actual level (not debug level)
+        # Create the level
         self.blocks, self.pigs = LevelBuilder.create_level(
             self.physics.space, self.current_level
         )
         
+        print(f"Level {self.current_level} loaded: {len(self.blocks)} blocks, {len(self.pigs)} pigs")
+        
         # Setup collision handlers
         self.physics.setup_collision_handlers(self.pigs, self.blocks, self.birds)
         
-        # Create birds based on level (only once!)
+        # Create birds based on level
         bird_types = LevelBuilder.get_bird_lineup(self.current_level)
         for i, bird_type in enumerate(bird_types):
             if bird_type == "yellow":
@@ -150,10 +148,13 @@ class AngryBirdsGame:
                     radius=radius, mass=mass, color=color, bird_type=bird_type)
             self.birds.append(bird)
         
-        # Pre-settle the structure - Logic Point 6
+        # Pre-settle the structure
         self.settling_counter = self.pre_settle_frames
         for _ in range(30):  # Quick pre-settle
-            self.physics.step(self.physics_dt)
+            try:
+                self.physics.step(self.physics_dt)
+            except:
+                break  # Stop if physics fails
         
         # Load first bird
         if self.birds:
@@ -200,8 +201,10 @@ class AngryBirdsGame:
                 elif event.key == pygame.K_p and self.state == GameState.PLAYING:
                     self.state = GameState.PAUSED
                     
-                elif event.key == pygame.K_p and self.state == GameState.PAUSED:
-                    self.state = GameState.PLAYING
+                elif event.key == pygame.K_r and self.state == GameState.PLAYING:
+                    # Reload current level
+                    self.reset_level()
+                    print("Level reloaded!")
                     
                 # Menu navigation
                 elif self.state == GameState.MENU:
@@ -503,11 +506,11 @@ class AngryBirdsGame:
                 self.ui.draw_background()
                 self.draw_game_world(self.screen, (0, 0))
             
-            # Draw HUD (always on top, no shake/camera) - Logic Point 2
+            # Draw HUD (always on top, no shake/camera)
             birds_left = len(self.birds) + (1 if self.current_bird else 0)
             pigs_left = sum(1 for pig in self.pigs if not pig.dead)
             
-            # Show combo multiplier if active - Logic Point 8
+            # Show combo multiplier if active
             display_score = self.score + self.total_score
             if self.combo_multiplier > 1:
                 combo_text = f" x{self.combo_multiplier:.1f}"
