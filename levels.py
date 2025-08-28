@@ -1,5 +1,5 @@
 """
-levels.py - Level builder with different castle configurations
+levels.py - Level builder with fixed stable castle configurations
 """
 
 from entities import Block, Pig
@@ -61,37 +61,48 @@ class LevelBuilder:
     
     @staticmethod
     def create_ice_fortress(space):
-        """Create a fortress made primarily of ice"""
+        """Create a STABLE fortress made primarily of ice"""
         blocks = []
         pigs = []
-        x_start = 650
+        x_start = 700
         ground_y = WIN_HEIGHT - GROUND_HEIGHT
         
-        # Ice foundation
-        for i in range(4):
-            blocks.append(Block(space, x_start + i * 50, ground_y - 30, 45, 30, "ice"))
+        # STABLE BASE - Use stone for foundation to support ice structure
+        # Stone foundation blocks (wider and more stable)
+        blocks.append(Block(space, x_start - 30, ground_y - 30, 60, 30, "stone"))
+        blocks.append(Block(space, x_start + 40, ground_y - 30, 60, 30, "stone"))
+        blocks.append(Block(space, x_start + 110, ground_y - 30, 60, 30, "stone"))
         
-        # Ice walls - first floor
-        blocks.append(Block(space, x_start - 10, ground_y - 130, 20, 100, "ice"))
-        blocks.append(Block(space, x_start + 190, ground_y - 130, 20, 100, "ice"))
+        # First floor - Mix of ice and wood for stability
+        # Left wall (wood for strength)
+        blocks.append(Block(space, x_start - 20, ground_y - 110, 25, 80, "wood"))
+        # Right wall (wood for strength)
+        blocks.append(Block(space, x_start + 175, ground_y - 110, 25, 80, "wood"))
         
-        # Platform
-        blocks.append(Block(space, x_start - 20, ground_y - 140, 240, 15, "wood"))
+        # Ice decorative walls (thinner, between wood supports)
+        blocks.append(Block(space, x_start + 30, ground_y - 90, 20, 60, "ice"))
+        blocks.append(Block(space, x_start + 130, ground_y - 90, 20, 60, "ice"))
         
-        # Second floor ice walls
-        blocks.append(Block(space, x_start + 20, ground_y - 240, 20, 100, "ice"))
-        blocks.append(Block(space, x_start + 160, ground_y - 240, 20, 100, "ice"))
+        # First platform (wood for stability)
+        blocks.append(Block(space, x_start - 25, ground_y - 120, 230, 20, "wood"))
         
-        # Top platform
-        blocks.append(Block(space, x_start + 10, ground_y - 250, 180, 15, "ice"))
+        # Second floor structure (lighter)
+        # Ice pillars (shorter for stability)
+        blocks.append(Block(space, x_start + 10, ground_y - 180, 20, 60, "ice"))
+        blocks.append(Block(space, x_start + 150, ground_y - 180, 20, 60, "ice"))
         
-        # Decorative ice blocks
-        blocks.append(Block(space, x_start + 50, ground_y - 290, 30, 40, "ice"))
-        blocks.append(Block(space, x_start + 120, ground_y - 290, 30, 40, "ice"))
+        # Top platform (smaller and centered)
+        blocks.append(Block(space, x_start + 5, ground_y - 190, 170, 15, "ice"))
         
-        # Add pigs
-        pigs.append(Pig(space, x_start + 100, ground_y - 170, pig_type="normal"))
-        pigs.append(Pig(space, x_start + 100, ground_y - 280, pig_type="helmet"))
+        # Small ice decorations on top (optional, lightweight)
+        blocks.append(Block(space, x_start + 70, ground_y - 220, 30, 30, "ice"))
+        blocks.append(Block(space, x_start + 100, ground_y - 220, 30, 30, "ice"))
+        
+        # Add pigs in stable positions
+        # Ground level pig (protected by structure)
+        pigs.append(Pig(space, x_start + 90, ground_y - 60, pig_type="normal"))
+        # Second floor pig
+        pigs.append(Pig(space, x_start + 90, ground_y - 150, pig_type="helmet"))
         
         return blocks, pigs
     
